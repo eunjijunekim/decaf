@@ -1,0 +1,412 @@
+#!/usr/bin/env perl
+use warnings;
+use strict;
+use Cwd 'abs_path';
+my $usage = "USAGE : DECAF <data> <sample_condition_file> <loc>
+
+<data> original spreadsheet. 
+<sample condition file> sample condition information file (header: ID<tab>COND)
+<loc> output directory
+
+[options]
+ By default:
+ \"Exhaustive Mode\" is used when <total_num_sample> <= 10 and
+ \"P-value Mode\" is used when <total_num_sample> > 10. 
+
+ You can force DECAF to use Exhaustive Mode even if total number of samples > 10,
+ by using this option:
+ -E : Exhaustive Mode
+
+ -h : display usage
+
+";
+
+for(my $i=0;$i<@ARGV;$i++){
+    if ($ARGV[$i] eq '-h'){
+	die $usage;
+    }
+}
+if (@ARGV<3){
+    die $usage;
+}
+my $p;
+my $E_mode = "false";
+my $P_mode = "false";
+my $m_option = "";
+my $cntE = 0;
+for(my $i=3;$i<@ARGV;$i++){
+    my $option_f = "false";
+    if ($ARGV[$i] eq '-h'){
+	$option_f = "true";
+	die $usage;
+    }
+    if ($ARGV[$i] eq '-E'){
+	$option_f = "true";
+	$E_mode = "true";
+        $m_option = "-E";
+        $cntE++;
+    }
+    if ($option_f eq "false"){
+	die "option \"$ARGV[$i]\" was not recognized.\n";
+    }
+}
+
+my $path = abs_path($0);
+$path =~ s/DECAF$//;
+my $data = $ARGV[0];
+my $sampleinfo = $ARGV[1];
+my $loc = $ARGV[2];
+unless(-d $loc){
+    `mkdir -p $loc`;
+}
+
+open(IN, $sampleinfo) or die "ERROR: cannot open $sampleinfo\n";
+my $h = <IN>;
+chomp($h);
+unless ($h eq "ID\tCOND"){
+    die "ERROR: $sampleinfo file is missing a header line\n";
+}
+my $total = 0;
+my (%CONDS, %ORD, %SAMPCOND);
+my $r0 = 1;
+my $r1 = 1;
+my $o_cnt = 0;
+my $p_string = "";
+while(my $line = <IN>){
+    chomp($line);
+    my ($sample, $cond) = split(/\t/,$line);
+    $total++;
+    unless (exists $ORD{$cond}){
+        $ORD{$cond} = $o_cnt;
+        $o_cnt++;
+    }
+    $SAMPCOND{$sample} = $ORD{$cond};
+    $p_string .= "c" . $SAMPCOND{$sample} . "r";
+    if ($SAMPCOND{$sample} eq 0){
+        $p_string .= "$r0\t";
+        $r0++;
+    }
+    if ($SAMPCOND{$sample} eq 1){
+        $p_string .= "$r1\t";
+        $r1++;
+    }
+    if (exists $CONDS{$ORD{$cond}}){
+        $CONDS{$ORD{$cond}}++;
+    }
+    else{
+        $CONDS{$ORD{$cond}}=1;
+    }
+}
+close(IN);
+$p_string =~ s/\t$//;
+
+if ($o_cnt > 2){
+    die "ERROR: Can't have more than two conditions\n";
+}
+
+my $n0 = $CONDS{0};
+my $n1 = $CONDS{1};
+
+my $default = "true";
+if ($cntE == 1){
+    $default = "false";
+}
+if ($default eq 'true'){
+    if ($total > 10){
+	$P_mode = "true";
+    }
+    else{
+	$E_mode = "true";
+    }
+}
+if (($total < 4) || ($n0 < 2) || ($n1 < 2)){
+    die "ERROR: each condition needs to have at least two replicates \n\n";
+}
+##DEBUG
+#$P_mode = "true";
+#$E_mode = "false";
+##DEBUG
+open(IN, $data) or die "cannot find $data\n\n";
+my $header = <IN>;
+chomp($header);
+my @nc = split(/\t/,$header);
+my $nums = 0;
+my %ColN;
+for(my $i=1;$i<@nc;$i++){
+    if (exists $SAMPCOND{$nc[$i]}){
+       $nums++;
+       $ColN{$nc[$i]} = $i;
+    }
+}
+close(IN);
+my $cnt_table = "$loc/count_table.txt";
+my $o_for_p = "";
+open(IN, $sampleinfo) or die "ERROR: cannot open $sampleinfo\n";
+$h = <IN>;
+my $for_awk = "awk -v OFS='\\t' '{print \$1";
+while(my $line = <IN>){
+    chomp($line);
+    my ($sample, $cond) = split(/\t/,$line);
+    my $acol = $ColN{$sample}+1;
+    my $col_awk = ",\$" . $acol;
+    $for_awk .= $col_awk;
+    $o_for_p .= $SAMPCOND{$sample};
+}
+close(IN);
+$for_awk .= "}' $data > $cnt_table";
+if ($nums ne $total){
+   die "ERROR: the input file does not have $total samples. \n\n";
+}
+#reorder spreadsheet 
+my $r = `$for_awk`;
+#remove header
+my $s = `sed -i 1d $cnt_table`;
+
+my %SET;
+if ($E_mode eq "true"){
+    print "\n\n=================================\nStarting DECAF in Exhaustive Mode\n=================================\n\n";
+    if ($n0 <= $n1){
+        my $x = 2;
+        my $y = $total-$x;
+        my @array = sort($x,$y);
+        $SET{$array[0]} = $array[1];
+        until ($y < 3){
+	    $x++;
+	    $y--;
+	    @array = sort($x,$y);
+	    $SET{$array[0]} = $array[1];
+        }
+    }
+    else{
+       my $y = 2;
+       my $x = $total-$y;
+       my @array = sort{$b<=>$a}($x,$y);
+       $SET{$array[0]} = $array[1];
+       until ($x < 3){
+            $x--;
+            $y++;
+            @array = sort{$b<=>$a}($x,$y);
+            $SET{$array[0]} = $array[1];
+       }
+    }
+}
+if ($P_mode eq "true"){
+    print "\n\n==============================\nStarting DECAF in P-value Mode\n==============================\n\n";
+    my $x = 2;
+    my $y = $total-$x;
+    my @array = ($x,$y);
+    $SET{$array[0]} = $array[1];
+    until ($y < 3){
+	$x++;
+	$y--;
+	@array = ($x,$y);
+	$SET{$array[0]} = $array[1];
+    }
+}
+#=comment
+#print "default:$default\tE_mode:$E_mode\tP_mode:$P_mode\n";
+my $all_perm = "$loc/all_perm.temp.txt";
+if (-e $all_perm){
+    $p = `rm $all_perm`;
+}
+
+foreach my $key (keys %SET){
+    my $n0_t = $key;
+    my $n1_t = $SET{$key};
+    #make all combination file
+    my $type = $n0_t . "vs" .$n1_t;
+    my $index = "$loc/perm.$type.txt";
+    if (-e $index){
+	$p = `rm $index`;
+    }
+    $p = `perl $path/perm.pl $n0_t $n1_t $index`;
+    if ($P_mode eq "true"){
+        $p = `cat $index >> $all_perm`;
+    }
+}
+
+# choose 1000 permutations at random for p-value mode
+if ($P_mode eq "true"){
+    my $x = `wc -l $all_perm`;
+    chomp($x);
+    my @a = split(" ", $x);
+    my $lc = $a[0];
+    my $shuf = $all_perm;
+    $shuf =~ s/.txt$/.100.txt/;
+    if (-e $shuf){
+        $p = `rm $shuf`;
+    }
+    $p = `perl $path/run_shuf.pl $all_perm $lc 1000 > $shuf`;
+    foreach my $key (keys %SET){
+        my $n0_t = $key;
+        my $n1_t = $SET{$key};
+        my $type = $n0_t . "vs" .$n1_t;
+        my $index = "$loc/perm.$type.txt";
+        if (-e $index){
+            $p = `rm $index`;
+        }
+        my $check1 = `grep -wc $type $shuf`;
+        if ($check1 > 0){
+            $p = `grep -w $type $shuf > $index`;
+        }
+        if ($n0 eq $n0_t){
+            my $check = `grep -wc \"$p_string\" $index`;
+            if ($check == 0){ #add n0vsn1 to index if not included already
+                $p = `grep -w \"$p_string\" $all_perm >> $index`;
+            }
+        }
+    }
+}
+my $total_perm = 0;
+
+#=comment
+#run page 
+foreach my $key (keys %SET){
+    my $n0_t = $key;
+    my $n1_t = $SET{$key};
+    my $type = $n0_t . "vs" .$n1_t;
+    my $index = "$loc/perm.$type.txt";
+    if (-e $index){
+        my $x = `wc -l $index`;
+        chomp($x);
+        my @a = split(" ", $x);
+        my $lc = $a[0];
+        $total_perm += $lc;
+        my $errname = "runpage.$type.*.err";
+        &clear_log($errname);
+        system("perl $path/runall_page.pl $cnt_table $loc $n0_t $n1_t $m_option");
+        print "$index\n";
+    }
+}
+#=cut
+
+print "TOTAL:$total_perm\n"; #DEBUG
+#=comment
+#wait for all PaGE jobs to finish
+my $num_out = &getNumLogs;
+my $date = `date`;
+until ($num_out eq $total_perm){
+    $date = `date`;
+    print "$total_perm\t$num_out\t$date"; #DEBUG
+    sleep(20);
+    $num_out =&getNumLogs;
+}
+$date = `date`; #DEBUG
+print "$total_perm\t$num_out\t$date"; #DEBUG
+#=cut
+print "check logs\n"; #DEBUG
+# check logfiles
+&check_exit;
+
+###PART2
+my @g = glob("$loc/*html");
+if (@g > 0){
+    `rm $loc/*html`;
+}
+my $tmpfile = "$loc/file_of_perm.txt";
+open(OUT, ">$tmpfile");
+foreach my $key (keys %SET){
+    my $n0 = $key;
+    my $n1 = $SET{$key};
+    my $type = $n0 . "vs" .$n1;
+    my $index = "$loc/perm.$type.txt";
+    if (-e $index){
+        print OUT "$index\n";
+        my $sum = "$loc/all_perm.$type.txt";
+        $p = `perl $path/parse_PAGE_txtoutput.pl $cnt_table $index > $sum`;
+    }
+}
+close(OUT);
+
+print "get p-value\n"; #DEBUG
+$p = `perl $path/get_comb_and_score.pl $tmpfile $loc $total $m_option`;
+$p = `perl $path/get_pvals.pl $loc $o_for_p $sampleinfo`;
+#=cut
+
+sub clear_log{
+    my ($err_name) = @_;
+    my $out_name = $err_name;
+    $out_name =~ s/err$/out/g;
+    my @g = glob("$loc/logs/$out_name");
+    if (@g ne '0'){
+        `rm $loc/logs/$out_name`;
+    }
+    @g = glob("$loc/logs/$err_name");
+    if (@g ne '0'){
+        `rm $loc/logs/$err_name`;
+    }
+}
+sub check_exit {
+    foreach my $key (keys %SET){
+        my $n0_t = $key;
+        my $n1_t = $SET{$key};
+        my $type = $n0_t . "vs" .$n1_t;
+        my $permfile = "$loc/perm.$type.txt";
+	if (-e $permfile){
+	    open(PM, $permfile);
+	    while(my $line = <PM>){
+		my @x = split(/\t/,$line);
+		my $id = $x[0];
+		my $log = "$loc/logs/runpage.$id.out";
+		my $check_out = `grep -c "got here" $log`;
+		chomp($check_out);
+		if ($check_out ne 1){
+		    die "ERROR: page job did not finish successfully for $type.\n\nPlease check the logfile:\n$log\n";
+		}
+		my $err = $log;
+		$err =~ s/.out$/.err/;
+		my $x = `wc -l $err`;
+		my @a = split(" ", $x);
+		if ($a[0] > 0){
+		    die "ERROR: page job did not finish successfully for $type.\n\nPlease check the logfile:\n$err\n";
+		}
+	    }
+	    close(PM);
+	}
+=comment
+        my @o = glob("$loc/logs/runpage.$type.*.out");
+	foreach my $log (@o){
+	    my $check_out = `grep -c "got here" $log`;
+	    chomp($check_out);
+	    if ($check_out ne 1){
+		die "ERROR: page job did not finish successfully for $type.\n\nPlease check the logfile:\n$log\n";
+	    }
+	    my $err = $log;
+	    $err =~ s/.out$/.err/;
+	    my $x = `wc -l $err`;
+	    my @a = split(" ", $x);
+	    if ($a[0] > 0){
+		die "ERROR: page job did not finish successfully for $type.\n\nPlease check the logfile:\n$err\n";
+	    }
+	}
+=cut
+    }
+}
+
+sub getNumLogs{
+    my $total_logs = 0;
+    foreach my $key (keys %SET){
+	my $n0_t = $key;
+	my $n1_t = $SET{$key};
+	my $type = $n0_t . "vs" .$n1_t;
+#=port issue
+	my $permfile = "$loc/perm.$type.txt";
+	if (-e $permfile){
+	    open(PM, $permfile);
+	    while(my $line = <PM>){
+		my @x = split(/\t/,$line);
+		my $id = $x[0];
+		my $file = "$loc/logs/runpage.$id.out";
+		if (-e $file){
+		    $total_logs++;
+		}
+	    }
+	    close(PM);
+	}
+#=cut
+#	my @o = glob("$loc/logs/runpage.$type.*.out");
+#	my $numout = @o;
+#	$total_logs += $numout;
+    }
+    return $total_logs;
+}

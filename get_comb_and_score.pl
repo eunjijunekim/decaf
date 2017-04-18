@@ -16,13 +16,16 @@ my $usage = "perl get_comb_and_score.pl <file of all index> <loc> <numberofsampl
 
 
 ";
+
+if (@ARGV<3){
+    die $usage;
+}
+
+
 for(my $i=0;$i<@ARGV;$i++){
     if ($ARGV[$i] eq '-h'){
         die $usage;
     }
-}
-if (@ARGV<3){
-    die $usage;
 }
 my $cnt = 0;
 my $E_mode = "false";
@@ -69,7 +72,9 @@ foreach my $f (@fdr){
     my $count = "$loc/counts.$f.txt";
     my $final = "$loc/final.$f.txt";
     open(OUT, ">$count");
+    my %SEEN = ();
     open(ID, $index) or die "cannot open $index\n";
+    %PAT = ();
     while(my $line = <ID>){
 	chomp($line);
 	open(IX, $line) or die "cannot open $line\n";
@@ -104,17 +109,23 @@ foreach my $f (@fdr){
 	    my @x = split(/\t/,$line);
 	    my $id = $x[0];
 	    my $score = $x[$col];
-	    chomp($PAT{$id});
-	    print OUT "$PAT{$id}\t$score\n";
+	    my $check = $PAT{$id};
+	    chomp($check);
+	    unless (exists $SEEN{$check}){
+	    	print OUT "$check\t$score\n";
+		$SEEN{$check} = 1;
+	    }
             if ($E_mode eq "true"){
-                my $zeros = $PAT{$id} =~ tr/0//;
-                my $ones = $PAT{$id} =~ tr/1//;
+                my $zeros = $check =~ tr/0//;
+                my $ones = $check =~ tr/1//;
                 unless ($zeros == $ones){
-                    my $newid = $PAT{$id};
+                    my $newid = $check;
                     $newid =~ s/1/2/g;
                     $newid =~ s/0/1/g;
                     $newid =~ s/2/0/g;
-	            print OUT "$newid\t$score\n";
+		    unless (exists $SEEN{$check}){
+	            	print OUT "$newid\t$score\n";
+		    }
                 }
             }
 	}

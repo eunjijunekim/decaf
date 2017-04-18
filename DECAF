@@ -4,9 +4,11 @@ use strict;
 use Cwd 'abs_path';
 my $usage = "USAGE : DECAF <data> <sample_condition_file> <loc>
 
-<data> original spreadsheet. 
-<sample condition file> sample condition information file (header: ID<tab>COND)
-<loc> output directory
+<data>: spreadsheet. 
+<sample condition file>: tab-delimited text file with sample names (and condition)
+                         - if condition known, provide sample names and condition (header: ID<tab>COND)
+                         - if condition unknown, just provide the sample names (header: ID)
+<loc>: output directory
 
 [options]
  By default:
@@ -59,12 +61,19 @@ my $loc = $ARGV[2];
 unless(-d $loc){
     `mkdir -p $loc`;
 }
-
+my $twoCond = "";
 open(IN, $sampleinfo) or die "ERROR: cannot open $sampleinfo\n";
 my $h = <IN>;
 chomp($h);
-unless ($h eq "ID\tCOND"){
-    die "ERROR: $sampleinfo file is missing a header line\n";
+$h =~ s/^\s+|\s+$//g;
+if ($h =~  /^ID\tCOND$/){
+    $twoCond = "true";
+}
+elsif ($h =~ /^ID$/){
+    $twoCond = "false";
+}
+else{
+    die "ERROR: Please check the $sampleinfo file.\n";
 }
 my $total = 0;
 my (%CONDS, %ORD, %SAMPCOND);
@@ -74,38 +83,51 @@ my $o_cnt = 0;
 my $p_string = "";
 while(my $line = <IN>){
     chomp($line);
-    my ($sample, $cond) = split(/\t/,$line);
-    $total++;
-    unless (exists $ORD{$cond}){
-        $ORD{$cond} = $o_cnt;
-        $o_cnt++;
-    }
-    $SAMPCOND{$sample} = $ORD{$cond};
-    $p_string .= "c" . $SAMPCOND{$sample} . "r";
-    if ($SAMPCOND{$sample} eq 0){
-        $p_string .= "$r0\t";
-        $r0++;
-    }
-    if ($SAMPCOND{$sample} eq 1){
-        $p_string .= "$r1\t";
-        $r1++;
-    }
-    if (exists $CONDS{$ORD{$cond}}){
-        $CONDS{$ORD{$cond}}++;
+    $line =~ s/^\s+|\s+$//g;
+    my ($sample, $cond);
+    if ($twoCond eq "true"){
+        ($sample, $cond) = split(/\t/,$line);
     }
     else{
-        $CONDS{$ORD{$cond}}=1;
+        $sample = $line;
+    }
+    $total++;
+    if ($twoCond eq "true"){
+        unless (exists $ORD{$cond}){
+            $ORD{$cond} = $o_cnt;
+            $o_cnt++;
+    	}
+    	$SAMPCOND{$sample} = $ORD{$cond};
+    	$p_string .= "c" . $SAMPCOND{$sample} . "r";
+    	if ($SAMPCOND{$sample} eq 0){
+            $p_string .= "$r0\t";
+            $r0++;
+    	}
+    	if ($SAMPCOND{$sample} eq 1){
+            $p_string .= "$r1\t";
+            $r1++;
+    	}
+    	if (exists $CONDS{$ORD{$cond}}){
+            $CONDS{$ORD{$cond}}++;
+    	}
+    	else{
+            $CONDS{$ORD{$cond}}=1;
+    	}
+    }
+    else{
+        $SAMPCOND{$sample} = 1;
     }
 }
 close(IN);
-$p_string =~ s/\t$//;
-
-if ($o_cnt > 2){
-    die "ERROR: Can't have more than two conditions\n";
+my ($n0, $n1);
+if ($twoCond eq "true"){
+    $p_string =~ s/\t$//;
+    if ($o_cnt > 2){
+	die "ERROR: Can't have more than two conditions\n";
+    }
+    $n0 = $CONDS{0};
+    $n1 = $CONDS{1};
 }
-
-my $n0 = $CONDS{0};
-my $n1 = $CONDS{1};
 
 my $default = "true";
 if ($cntE == 1){
@@ -119,8 +141,10 @@ if ($default eq 'true'){
 	$E_mode = "true";
     }
 }
-if (($total < 4) || ($n0 < 2) || ($n1 < 2)){
-    die "ERROR: each condition needs to have at least two replicates \n\n";
+if ($twoCond eq "true"){
+    if (($total < 4) || ($n0 < 2) || ($n1 < 2)){
+    	die "ERROR: each condition needs to have at least two replicates \n\n";
+    }
 }
 ##DEBUG
 #$P_mode = "true";
@@ -157,6 +181,8 @@ $for_awk .= "}' $data > $cnt_table";
 if ($nums ne $total){
    die "ERROR: the input file does not have $total samples. \n\n";
 }
+#print "forawk:$for_awk\no_for_p:$o_for_p\np_string:$p_string\n"; #DEBUG
+#die; #DEBUG
 #reorder spreadsheet 
 my $r = `$for_awk`;
 #remove header
@@ -165,19 +191,22 @@ my $s = `sed -i 1d $cnt_table`;
 my %SET;
 if ($E_mode eq "true"){
     print "\n\n=================================\nStarting DECAF in Exhaustive Mode\n=================================\n\n";
-    if ($n0 <= $n1){
-        my $x = 2;
-        my $y = $total-$x;
-        my @array = sort($x,$y);
-        $SET{$array[0]} = $array[1];
-        until ($y < 3){
-	    $x++;
-	    $y--;
-	    @array = sort($x,$y);
-	    $SET{$array[0]} = $array[1];
-        }
+#=comment
+#    if ($n0 <= $n1){
+    my $x = 2;
+    my $y = $total-$x;
+    my @array = sort($x,$y);
+    $SET{$array[0]} = $array[1];
+    until ($y < 3){
+    	$x++;
+	$y--;
+	@array = sort($x,$y);
+	$SET{$array[0]} = $array[1];
+    }
+=comment
     }
     else{
+#=cut
        my $y = 2;
        my $x = $total-$y;
        my @array = sort{$b<=>$a}($x,$y);
@@ -188,8 +217,10 @@ if ($E_mode eq "true"){
             @array = sort{$b<=>$a}($x,$y);
             $SET{$array[0]} = $array[1];
        }
-    }
+#    }
+=cut
 }
+
 if ($P_mode eq "true"){
     print "\n\n==============================\nStarting DECAF in P-value Mode\n==============================\n\n";
     my $x = 2;
@@ -232,7 +263,7 @@ if ($P_mode eq "true"){
     my @a = split(" ", $x);
     my $lc = $a[0];
     my $shuf = $all_perm;
-    $shuf =~ s/.txt$/.100.txt/;
+    $shuf =~ s/.txt$/.1000.txt/;
     if (-e $shuf){
         $p = `rm $shuf`;
     }
@@ -249,7 +280,7 @@ if ($P_mode eq "true"){
         if ($check1 > 0){
             $p = `grep -w $type $shuf > $index`;
         }
-        if ($n0 eq $n0_t){
+        if (($twoCond eq "true") && ($n0 eq $n0_t)){
             my $check = `grep -wc \"$p_string\" $index`;
             if ($check == 0){ #add n0vsn1 to index if not included already
                 $p = `grep -w \"$p_string\" $all_perm >> $index`;
@@ -318,9 +349,13 @@ foreach my $key (keys %SET){
 }
 close(OUT);
 
-print "get p-value\n"; #DEBUG
 $p = `perl $path/get_comb_and_score.pl $tmpfile $loc $total $m_option`;
-$p = `perl $path/get_pvals.pl $loc $o_for_p $sampleinfo`;
+if ($twoCond eq "true"){
+    $p = `perl $path/summarize.pl $loc $sampleinfo -original $o_for_p`;
+}
+else{
+    $p = `perl $path/summarize.pl $loc $sampleinfo`;
+}
 #=cut
 
 sub clear_log{
